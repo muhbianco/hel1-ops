@@ -85,15 +85,18 @@ update_services() {
 
 # Depois de um deploy feito por fora (Portainer): espera cada serviço rodar a tag nova e o
 # update terminar. Falha em rollback/pausa ou após WAIT_TIMEOUT segundos.
+# `since` (epoch) separa o update deste deploy de um rollback/pausa que sobrou de um deploy anterior.
 wait_services() {
-  local tag=$1 services=$2 svc now state deadline=$((SECONDS + ${WAIT_TIMEOUT:-900}))
+  local tag=$1 services=$2 since=$3 svc now state started deadline=$((SECONDS + ${WAIT_TIMEOUT:-900}))
   [ -n "$services" ] || return 0
   for svc in ${services//,/ }; do
     while :; do
       now=$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$svc")
       state=$(docker service inspect --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' "$svc")
       case "$state" in
-        rollback_* | paused) log "FALHA $svc: update=$state"; return 1 ;;
+        rollback_* | paused)
+          started=$(docker service inspect --format '{{if .UpdateStatus}}{{if .UpdateStatus.StartedAt}}{{.UpdateStatus.StartedAt.Unix}}{{end}}{{end}}' "$svc")
+          if [ "${started:-0}" -ge "$since" ]; then log "FALHA $svc: update=$state"; return 1; fi ;;
       esac
       case "$now" in
         *":$tag" | *":$tag@"*)
@@ -152,8 +155,9 @@ case "$cmd" in
     commit_info
     lock "$APP"
     guard "$APP" "$SHA" "$EPOCH" || exit 0
+    since=$(date +%s)
     "$@"
-    wait_services "$TAG" "$WAIT"
+    wait_services "$TAG" "$WAIT" "$since"
     smoke "$SMOKE"
     record "$APP" "$SHA" "$EPOCH" "$TAG" "-" "-"
     log "deploy $APP ${SHA:0:12} ok"
