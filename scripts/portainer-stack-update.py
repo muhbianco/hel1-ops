@@ -88,6 +88,13 @@ def main() -> int:
     ap.add_argument("--set-env", action="append", default=[])
     ap.add_argument("--env-file", action="append", default=[], type=pathlib.Path)
     ap.add_argument("--create", action="store_true", help="create a new Swarm stack (refuses if it exists)")
+    ap.add_argument(
+        "--allow-empty",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="a ${KEY} the YAML needs that may be empty in the Env (e.g. SMTP not configured yet)",
+    )
     ap.add_argument("--prune", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -129,9 +136,13 @@ def main() -> int:
 
     needed = needed_vars(yaml_text)
     present = {e["name"]: bool(e.get("value")) for e in env}
-    missing = [k for k in needed if not present.get(k) and k not in OPTIONAL_EMPTY]
+    optional = OPTIONAL_EMPTY | set(args.allow_empty)
+    missing = [k for k in needed if not present.get(k) and k not in optional]
     print(f"stack={args.stack} id={stack_id} env_keys={sorted(present)}")
     print(f"yaml live={sha(live_yaml)} new={sha(yaml_text)} needs={needed}")
+    empty_allowed = sorted(k for k in needed if not present.get(k) and k in optional)
+    if empty_allowed:
+        print(f"empty by design: {empty_allowed}")
     if missing:
         print(f"ABORT: YAML needs env without value: {missing}")
         return 3
@@ -180,7 +191,8 @@ def create(args: argparse.Namespace, matches: list[dict], assignments: list[str]
 
     needed = needed_vars(yaml_text)
     present = {e["name"]: bool(e.get("value")) for e in env}
-    missing = [k for k in needed if not present.get(k) and k not in OPTIONAL_EMPTY]
+    optional = OPTIONAL_EMPTY | set(args.allow_empty)
+    missing = [k for k in needed if not present.get(k) and k not in optional]
     print(f"create stack={args.stack} env_keys={sorted(present)}")
     print(f"yaml new={sha(yaml_text)} needs={needed}")
     if missing:
