@@ -10,7 +10,8 @@
 #
 # Secrets via ${VAR} no Env do Portainer, vindos de /root/.woodpecker.env na hel1:
 #   WOODPECKER_GITHUB_CLIENT, WOODPECKER_GITHUB_SECRET (OAuth App do GitHub,
-#   callback https://ci.muhbianco.com.br/authorize), WOODPECKER_AGENT_SECRET.
+#   callback https://ci.muhbianco.com.br/authorize), WOODPECKER_AGENT_SECRET, WOODPECKER_GRPC_SECRET
+#   (os dois últimos: `openssl rand -hex 32` gravado direto no arquivo, sem imprimir).
 # Criar/atualizar SEM passar segredo pelo chat (ver README):
 #   python3 scripts/portainer-stack-update.py --create --stack woodpecker \
 #     --yaml woodpecker/docker-stack.yml --env-file /root/.woodpecker.env --dry-run
@@ -27,6 +28,8 @@ services:
       WOODPECKER_GITHUB_CLIENT: ${WOODPECKER_GITHUB_CLIENT:?WOODPECKER_GITHUB_CLIENT obrigatorio}
       WOODPECKER_GITHUB_SECRET: ${WOODPECKER_GITHUB_SECRET:?WOODPECKER_GITHUB_SECRET obrigatorio}
       WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET obrigatorio}
+      # Assina a sessão gRPC dos agents; fixo para um restart do server não derrubar pipeline em curso.
+      WOODPECKER_GRPC_SECRET: ${WOODPECKER_GRPC_SECRET:?WOODPECKER_GRPC_SECRET obrigatorio}
       # Registro fechado; o admin listado ainda consegue o primeiro login.
       WOODPECKER_OPEN: "false"
       WOODPECKER_ADMIN: muhbianco

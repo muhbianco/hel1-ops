@@ -67,8 +67,10 @@ Pré-requisitos: DNS `A ci.muhbianco.com.br → hel1`; GitHub **OAuth App** (nã
 git clone https://github.com/muhbianco/hel1-ops.git /usr/src/hel1-ops
 # /root/.woodpecker.env (chmod 600): WOODPECKER_GITHUB_CLIENT=..., WOODPECKER_GITHUB_SECRET=...
 # o agent secret é gerado direto no arquivo, sem aparecer na tela:
-grep -q '^WOODPECKER_AGENT_SECRET=' /root/.woodpecker.env 2>/dev/null || \
-  (umask 077; printf 'WOODPECKER_AGENT_SECRET=%s\n' "$(openssl rand -hex 32)" >> /root/.woodpecker.env)
+for k in WOODPECKER_AGENT_SECRET WOODPECKER_GRPC_SECRET; do
+  grep -q "^$k=" /root/.woodpecker.env 2>/dev/null || \
+    (umask 077; printf '%s=%s\n' "$k" "$(openssl rand -hex 32)" >> /root/.woodpecker.env)
+done
 cd /usr/src/hel1-ops
 python3 scripts/portainer-stack-update.py --create --stack woodpecker \
   --yaml woodpecker/docker-stack.yml --env-file /root/.woodpecker.env --dry-run
