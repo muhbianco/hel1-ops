@@ -6,6 +6,7 @@ Infra compartilhada da VPS **hel1** (Docker Swarm + Traefik + Portainer): a stac
 | Caminho | O quê |
 |---|---|
 | `woodpecker/docker-stack.yml` | Stack `woodpecker` (server + 1 agent, máx. 2 pipelines simultâneos), `ci.muhbianco.com.br` |
+| `traefik/docker-stack.yml` + `traefik/apply.sh` | Stack `traefik` (borda 80/443, provider HTTP da mucommerce); deploy manual na hel1, ver `traefik/README.md` |
 | `scripts/portainer-stack-update.py` | Cria/atualiza stack no Portainer sem segredo passar por chat/log (só nomes de chave e hashes) |
 | `scripts/hel1-build` | `docker build` + tags `:<sha12>` (+ extras) + push, com labels OCI |
 | `scripts/hel1-deploy` | `docker service update` por serviço com lock, guarda de ordem, verificação, smoke e rollback |

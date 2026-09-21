@@ -1,0 +1,88 @@
+# Stack `traefik` da hel1: borda única (80/443) de todos os sites. Fonte de verdade desde a
+# etapa C da mucommerce (antes era só /root/traefik.yaml, sem versão).
+#
+# Aplicar SEMPRE com `traefik/apply.sh` na hel1 (ver traefik/README.md): ele injeta
+# INTERNAL_TOKEN_TRAEFIK de /root/.mucommerce.env sem imprimir o valor, valida, faz o deploy e
+# confere os sites. `docker stack deploy` à mão sem essa variável manda o header vazio e os
+# domínios de tenant param de atualizar (o Traefik mantém a última config boa em memória).
+#
+# O token acaba nos args do serviço: nunca despejar `docker service inspect traefik_traefik`
+# sem filtro. Com log.level=DEBUG o Traefik também loga a config estática com o header, então
+# o nível fica em INFO.
+version: "3.8"
+services:
+  traefik:
+    image: traefik:v3.7.10
+    command:
+      - "--api.dashboard=true"
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.exposedbydefault=false"
+      - "--providers.swarm.network=chatbot-net"
+      - "--providers.swarm.watch=true"
+      - "--providers.file.filename=/etc/traefik/dynamic_conf.yaml"
+      - "--providers.file.watch=true"
+      # Domínios de tenant da mucommerce (ADR 0003): a api-commerce devolve routers/services só
+      # dos hosts com tenant_domains.status = active. API fora do ar ou resposta inválida: o
+      # Traefik loga e segue com a última config.
+      - "--providers.http.endpoint=http://commerce-api:8000/api/v1/internal/edge/traefik"
+      - "--providers.http.pollInterval=15s"
+      - "--providers.http.pollTimeout=5s"
+      - "--providers.http.headers.X-Internal-Token=${INTERNAL_TOKEN_TRAEFIK}"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.transport.respondingTimeouts.idleTimeout=3600"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.email=muhbianco@gmail.com"
+      - "--log.level=INFO"
+      - "--log.format=common"
+      - "--accesslog=true"
+    volumes:
+      - "vol_certificates:/etc/traefik/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/root/dynamic_conf.yaml:/etc/traefik/dynamic_conf.yaml:ro"
+    networks:
+      - chatbot-net
+      - bolso-net
+      - stoat-net
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+
+volumes:
+  vol_certificates:
+    external: true
+    name: volume_swarm_certificates
+
+networks:
+  chatbot-net:
+    external: true
+    attachable: true
+    name: chatbot-net
+  bolso-net:
+    external: true
+    attachable: true
+    name: bolso-net
+  stoat-net:
+    external: true
+    attachable: true
+    name: stoat-net
