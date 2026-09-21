@@ -1,0 +1,18 @@
+# Limpeza diária do Docker na hel1. Cron criado na UI: repo hel1-ops → Settings → Crons,
+# nome "prune-daily", schedule "0 4 * * *" (UTC), branch main.
+when:
+  - event: cron
+    cron: prune-daily
+  - event: manual
+    evaluate: 'PRUNE == "true"'
+
+skip_clone: true
+
+steps:
+  prune:
+    image: muhrilobianco/ci-deployer:1
+    pull: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - prune.sh

@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# hel1-deploy — passo de deploy comum dos pipelines Woodpecker na hel1.
+#
+#   hel1-deploy services --app app-site --image muhrilobianco/app_site --tag <sha12> \
+#       --services app-site_app_site[,outro] [--smoke https://.../health]
+#   hel1-deploy exec --app commerce --tag <sha12> [--wait-services s1,s2] [--smoke URL[,URL]] -- <comando...>
+#   hel1-deploy rollback --app app-site          # volta os serviços para a tag anterior
+#   hel1-deploy status [--app app-site]
+#
+# `services` e `exec` rodam dentro do clone do pipeline (cwd = workspace) e exigem
+# CI_COMMIT_SHA (ou --sha). Garantias:
+#   - lock por app (flock): dois deploys do mesmo app nunca rodam juntos;
+#   - guarda de ordem: se o commit já implantado não é ancestral deste (ou é mais novo),
+#     sai 0 com "superseded" — um pipeline atrasado não sobrescreve um mais novo;
+#   - `services` confere, serviço a serviço, que a imagem nova ficou e o update completou
+#     (update_config.failure_action=rollback no YAML devolve a versão anterior sozinho);
+#   - estado só é gravado depois de tudo verde (+ smoke HTTP, se pedido).
+# Estado: $HEL1_DEPLOY_STATE (default /var/lib/hel1-deploy, montado do host no mesmo path).
+set -euo pipefail
+
+STATE_DIR="${HEL1_DEPLOY_STATE:-/var/lib/hel1-deploy}"
+HISTORY_KEEP=20
+
+die() { echo "hel1-deploy: $*" >&2; exit 2; }
+log() { echo "hel1-deploy: $*"; }
+
+usage() { sed -n '2,20p' "$0"; exit 2; }
+
+valid_app() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "app inválido: $1"; }
+
+lock() {
+  mkdir -p "$STATE_DIR"
+  exec 9>"$STATE_DIR/$1.lock"
+  log "aguardando lock de $1"
+  flock -w 3600 9 || die "timeout no lock de $1"
+}
+
+# 0 = seguir, 1 = superseded
+guard() {
+  local app=$1 sha=$2 epoch=$3 state="$STATE_DIR/$1.sha" last_sha last_epoch
+  [ -s "$state" ] || return 0
+  read -r last_sha last_epoch <"$state"
+  [ "$last_sha" = "$sha" ] && return 0
+  if git cat-file -e "${last_sha}^{commit}" 2>/dev/null; then
+    if git merge-base --is-ancestor "$last_sha" "$sha"; then return 0; fi
+    log "superseded: implantado ${last_sha:0:12} não é ancestral de ${sha:0:12}"
+    return 1
+  fi
+  # Implantado fora do clone raso: ou é mais novo (este pipeline está atrasado) ou mais velho
+  # que a profundidade do clone. A data do commit desempata.
+  if [ -n "${last_epoch:-}" ] && [ "$epoch" -lt "$last_epoch" ]; then
+    log "superseded: ${sha:0:12} é mais antigo que o implantado ${last_sha:0:12}"
+    return 1
+  fi
+  return 0
+}
+
+record() {
+  local app=$1 sha=$2 epoch=$3 tag=$4 image=$5 services=$6
+  printf '%s %s\n' "$sha" "$epoch" >"$STATE_DIR/$app.sha.tmp"
+  mv -f "$STATE_DIR/$app.sha.tmp" "$STATE_DIR/$app.sha"
+  printf '%s %s %s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sha" "$epoch" "$tag" "$image" "$services" \
+    >>"$STATE_DIR/$app.history"
+  tail -n "$HISTORY_KEEP" "$STATE_DIR/$app.history" >"$STATE_DIR/$app.history.tmp"
+  mv -f "$STATE_DIR/$app.history.tmp" "$STATE_DIR/$app.history"
+}
+
+update_services() {
+  local image=$1 tag=$2 services=$3 svc now state
+  for svc in ${services//,/ }; do
+    log "update $svc -> $image:$tag"
+    docker service update --quiet --with-registry-auth --detach=false --image "$image:$tag" "$svc" || true
+    now=$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$svc")
+    state=$(docker service inspect --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' "$svc")
+    case "$now" in
+      "$image:$tag" | "$image:$tag@"*) ;;
+      *) log "FALHA $svc: imagem ficou ${now%%@*} (update=$state)"; return 1 ;;
+    esac
+    case "$state" in
+      "" | completed) log "ok $svc" ;;
+      *) log "FALHA $svc: update=$state"; return 1 ;;
+    esac
+  done
+}
+
+# Depois de um deploy feito por fora (Portainer): espera cada serviço rodar a tag nova e o
+# update terminar. Falha em rollback/pausa ou após WAIT_TIMEOUT segundos.
+wait_services() {
+  local tag=$1 services=$2 svc now state deadline=$((SECONDS + ${WAIT_TIMEOUT:-900}))
+  [ -n "$services" ] || return 0
+  for svc in ${services//,/ }; do
+    while :; do
+      now=$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$svc")
+      state=$(docker service inspect --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' "$svc")
+      case "$state" in
+        rollback_* | paused) log "FALHA $svc: update=$state"; return 1 ;;
+      esac
+      case "$now" in
+        *":$tag" | *":$tag@"*)
+          if [ -z "$state" ] || [ "$state" = completed ]; then log "ok $svc"; break; fi ;;
+      esac
+      [ "$SECONDS" -lt "$deadline" ] || { log "FALHA $svc: timeout (imagem ${now%%@*}, update=$state)"; return 1; }
+      sleep 5
+    done
+  done
+}
+
+smoke() {
+  local url
+  for url in ${1//,/ }; do
+    curl -fsS -o /dev/null --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors "$url" \
+      && log "smoke ok $url" || { log "FALHA smoke $url"; return 1; }
+  done
+}
+
+commit_info() {
+  SHA="${OPT_SHA:-${CI_COMMIT_SHA:-}}"
+  [ -n "$SHA" ] || die "CI_COMMIT_SHA (ou --sha) obrigatório"
+  EPOCH=$(git log -1 --format=%ct "$SHA" 2>/dev/null) || die "commit $SHA não está no clone"
+}
+
+cmd=${1:-}; [ -n "$cmd" ] || usage; shift
+APP="" IMAGE="" TAG="" SERVICES="" SMOKE="" OPT_SHA="" WAIT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --app) APP=$2; shift 2 ;;
+    --image) IMAGE=$2; shift 2 ;;
+    --tag) TAG=$2; shift 2 ;;
+    --services) SERVICES=$2; shift 2 ;;
+    --smoke) SMOKE=$2; shift 2 ;;
+    --wait-services) WAIT=$2; shift 2 ;;
+    --sha) OPT_SHA=$2; shift 2 ;;
+    --) shift; break ;;
+    *) die "opção desconhecida: $1" ;;
+  esac
+done
+
+case "$cmd" in
+  services)
+    valid_app "$APP"; [ -n "$IMAGE" ] && [ -n "$TAG" ] && [ -n "$SERVICES" ] || usage
+    [ "$TAG" != latest ] || die "recuso :latest; use a tag do commit"
+    commit_info
+    lock "$APP"
+    guard "$APP" "$SHA" "$EPOCH" || exit 0
+    update_services "$IMAGE" "$TAG" "$SERVICES"
+    smoke "$SMOKE"
+    record "$APP" "$SHA" "$EPOCH" "$TAG" "$IMAGE" "$SERVICES"
+    log "deploy $APP ${SHA:0:12} ok"
+    ;;
+  exec)
+    valid_app "$APP"; [ -n "$TAG" ] && [ $# -gt 0 ] || usage
+    commit_info
+    lock "$APP"
+    guard "$APP" "$SHA" "$EPOCH" || exit 0
+    "$@"
+    wait_services "$TAG" "$WAIT"
+    smoke "$SMOKE"
+    record "$APP" "$SHA" "$EPOCH" "$TAG" "-" "-"
+    log "deploy $APP ${SHA:0:12} ok"
+    ;;
+  rollback)
+    valid_app "$APP"
+    lock "$APP"
+    [ -s "$STATE_DIR/$APP.history" ] || die "sem histórico para $APP"
+    read -r _ _ _ cur_tag _ _ < <(tail -n 1 "$STATE_DIR/$APP.history")
+    prev=$(awk -v t="$cur_tag" '$4 != t && $5 != "-"' "$STATE_DIR/$APP.history" | tail -n 1)
+    [ -n "$prev" ] || die "nenhuma versão anterior de serviços para $APP (apps via exec: rollback pela *_TAG anterior)"
+    read -r _ p_sha p_epoch p_tag p_image p_services <<<"$prev"
+    log "rollback $APP ${cur_tag} -> ${p_tag}"
+    update_services "$p_image" "$p_tag" "$p_services"
+    record "$APP" "$p_sha" "$p_epoch" "$p_tag" "$p_image" "$p_services"
+    log "rollback $APP ok (commit ${p_sha:0:12}); lembre de reverter o commit na branch de produção"
+    ;;
+  status)
+    shopt -s nullglob
+    for f in "$STATE_DIR"/${APP:-*}.history; do
+      echo "== $(basename "$f" .history)"; tail -n 5 "$f"
+    done
+    ;;
+  *) usage ;;
+esac

@@ -1,0 +1,130 @@
+# =============================================================================
+# Woodpecker CI — Stack Portainer (Docker Swarm + Traefik) na hel1
+# Fonte: hel1-ops@main  |  YAML: woodpecker/docker-stack.yml
+# Domínio: ci.muhbianco.com.br (DNS A → hel1)
+#
+# server: UI + API + webhooks do GitHub (porta 8000 via Traefik) e gRPC 9000 só na
+#         overlay interna `woodpecker-net` (não publicado).
+# agent:  backend docker no host (docker.sock). 1 agent × WOODPECKER_MAX_WORKFLOWS=2
+#         = no máximo 2 pipelines ao mesmo tempo.
+#
+# Secrets via ${VAR} no Env do Portainer, vindos de /root/.woodpecker.env na hel1:
+#   WOODPECKER_GITHUB_CLIENT, WOODPECKER_GITHUB_SECRET (OAuth App do GitHub,
+#   callback https://ci.muhbianco.com.br/authorize), WOODPECKER_AGENT_SECRET.
+# Criar/atualizar SEM passar segredo pelo chat (ver README):
+#   python3 scripts/portainer-stack-update.py --create --stack woodpecker \
+#     --yaml woodpecker/docker-stack.yml --env-file /root/.woodpecker.env --dry-run
+# =============================================================================
+
+version: "3.8"
+
+services:
+  server:
+    image: woodpeckerci/woodpecker-server:v3.18.1
+    environment:
+      WOODPECKER_HOST: https://ci.muhbianco.com.br
+      WOODPECKER_GITHUB: "true"
+      WOODPECKER_GITHUB_CLIENT: ${WOODPECKER_GITHUB_CLIENT:?WOODPECKER_GITHUB_CLIENT obrigatorio}
+      WOODPECKER_GITHUB_SECRET: ${WOODPECKER_GITHUB_SECRET:?WOODPECKER_GITHUB_SECRET obrigatorio}
+      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET obrigatorio}
+      # Registro fechado; o admin listado ainda consegue o primeiro login.
+      WOODPECKER_OPEN: "false"
+      WOODPECKER_ADMIN: muhbianco
+      # PR (inclusive de fork público: for-web, muchatwoot) só roda com aprovação.
+      WOODPECKER_DEFAULT_APPROVAL_MODE: pull_requests
+      # Default inclui push: cancelaria um deploy no meio de migração. Só PR cancela.
+      WOODPECKER_DEFAULT_CANCEL_PREVIOUS_PIPELINE_EVENTS: pull_request
+      WOODPECKER_MAX_PIPELINE_TIMEOUT: "120"
+      WOODPECKER_DISABLE_USER_AGENT_REGISTRATION: "true"
+      WOODPECKER_DATABASE_DRIVER: sqlite3
+      WOODPECKER_DATABASE_DATASOURCE: /var/lib/woodpecker/woodpecker.sqlite
+      WOODPECKER_LOG_LEVEL: info
+    volumes:
+      - woodpecker-server-data:/var/lib/woodpecker
+    networks:
+      - chatbot-net
+      - woodpecker-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      update_config:
+        # SQLite num volume: nunca dois servers ao mesmo tempo.
+        order: stop-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=chatbot-net
+        - traefik.http.routers.woodpecker.rule=Host(`ci.muhbianco.com.br`)
+        - traefik.http.routers.woodpecker.entrypoints=websecure
+        - traefik.http.routers.woodpecker.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.woodpecker.priority=20
+        - traefik.http.routers.woodpecker.service=woodpecker
+        - traefik.http.routers.woodpecker.middlewares=woodpecker_headers
+        - traefik.http.services.woodpecker.loadbalancer.server.port=8000
+        - traefik.http.services.woodpecker.loadbalancer.passHostHeader=true
+        - traefik.http.middlewares.woodpecker_headers.headers.stsSeconds=31536000
+        - traefik.http.middlewares.woodpecker_headers.headers.stsIncludeSubdomains=true
+        - traefik.http.middlewares.woodpecker_headers.headers.contentTypeNosniff=true
+        - traefik.http.middlewares.woodpecker_headers.headers.referrerPolicy=no-referrer
+        - traefik.http.middlewares.woodpecker_headers.headers.customFrameOptionsValue=DENY
+        - traefik.http.middlewares.woodpecker_headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow
+
+  agent:
+    image: woodpeckerci/woodpecker-agent:v3.18.1
+    environment:
+      WOODPECKER_SERVER: woodpecker_server:9000
+      WOODPECKER_AGENT_SECRET: ${WOODPECKER_AGENT_SECRET:?WOODPECKER_AGENT_SECRET obrigatorio}
+      WOODPECKER_HOSTNAME: hel1
+      WOODPECKER_MAX_WORKFLOWS: "2"
+      WOODPECKER_BACKEND: docker
+      # Limite por container de step (o docker build roda no dockerd do host, fora deste limite).
+      WOODPECKER_BACKEND_DOCKER_LIMIT_MEM: "4294967296"
+      WOODPECKER_BACKEND_DOCKER_LIMIT_CPU_QUOTA: "400000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - woodpecker-agent-config:/etc/woodpecker
+    networks:
+      - woodpecker-net
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        # Identidade do agent fica no volume: uma instância por vez.
+        order: stop-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.02"
+          memory: 32M
+
+networks:
+  chatbot-net:
+    external: true
+    name: chatbot-net
+  woodpecker-net:
+    driver: overlay
+    internal: true
+
+volumes:
+  woodpecker-server-data:
+  woodpecker-agent-config:

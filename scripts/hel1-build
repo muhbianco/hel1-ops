@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# hel1-build — build (+ push) de imagem nos pipelines Woodpecker, no dockerd do host.
+#
+#   hel1-build --image muhrilobianco/app_site --tag <sha12> [--context .] [--file Dockerfile] \
+#       [--build-arg K=V]... [--extra-tag latest]... [--local]
+#
+# Sempre marca :<tag> (imutável) e as --extra-tag. Sem --local faz push de todas para o
+# Docker Hub com o login do host (/root/.docker/config.json montado read-only no step).
+# --local: imagem só no host (ex.: muchat-web); ganha o label br.com.muhbianco.local=1,
+# que o prune diário respeita (guarda as últimas tags para rollback).
+set -euo pipefail
+
+IMAGE="" TAG="" CONTEXT="." FILE="" LOCAL=0
+BUILD_ARGS=() EXTRA_TAGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --image) IMAGE=$2; shift 2 ;;
+    --tag) TAG=$2; shift 2 ;;
+    --context) CONTEXT=$2; shift 2 ;;
+    --file) FILE=$2; shift 2 ;;
+    --build-arg) BUILD_ARGS+=(--build-arg "$2"); shift 2 ;;
+    --extra-tag) EXTRA_TAGS+=("$2"); shift 2 ;;
+    --local) LOCAL=1; shift ;;
+    *) echo "hel1-build: opção desconhecida: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$IMAGE" ] && [ -n "$TAG" ] || { sed -n '2,11p' "$0"; exit 2; }
+[ "$TAG" != latest ] || { echo "hel1-build: a tag principal não pode ser latest" >&2; exit 2; }
+
+labels=(
+  --label "org.opencontainers.image.revision=${CI_COMMIT_SHA:-unknown}"
+  --label "org.opencontainers.image.source=${CI_REPO_URL:-unknown}"
+  --label "br.com.muhbianco.pipeline=${CI_PIPELINE_URL:-manual}"
+)
+[ "$LOCAL" = 1 ] && labels+=(--label br.com.muhbianco.local=1)
+file_args=()
+[ -n "$FILE" ] && file_args=(-f "$FILE")
+
+echo "hel1-build: $IMAGE:$TAG (context=$CONTEXT${FILE:+ file=$FILE})"
+docker build --pull "${file_args[@]}" "${BUILD_ARGS[@]}" "${labels[@]}" -t "$IMAGE:$TAG" "$CONTEXT"
+for t in "${EXTRA_TAGS[@]}"; do docker tag "$IMAGE:$TAG" "$IMAGE:$t"; done
+
+if [ "$LOCAL" = 0 ]; then
+  for t in "$TAG" "${EXTRA_TAGS[@]}"; do docker push --quiet "$IMAGE:$t"; done
+  echo "hel1-build: digest $(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
+fi

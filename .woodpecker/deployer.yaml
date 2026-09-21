@@ -1,0 +1,25 @@
+# Imagem muhrilobianco/ci-deployer usada nos steps de build/deploy de todos os repos.
+# Tags: :<sha12> (imutável) e :1 (canal que os pipelines usam; mudança incompatível → :2).
+# Builda com docker:cli puro para não depender da própria imagem (primeira vez / imagem quebrada).
+when:
+  - event: push
+    branch: main
+    path:
+      include: [deployer/**, scripts/**, .woodpecker/deployer.yaml]
+  - event: manual
+
+depends_on: [ci]
+
+steps:
+  build-push:
+    image: docker:29.8.1-cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker/config.json:/root/.docker/config.json:ro
+    commands:
+      - TAG=${CI_COMMIT_SHA:0:12}
+      - docker build --pull -f deployer/Dockerfile --label org.opencontainers.image.revision=${CI_COMMIT_SHA} -t muhrilobianco/ci-deployer:$${TAG} .
+      - docker tag muhrilobianco/ci-deployer:$${TAG} muhrilobianco/ci-deployer:1
+      - docker push --quiet muhrilobianco/ci-deployer:$${TAG}
+      - docker push --quiet muhrilobianco/ci-deployer:1
+      - docker image inspect --format '{{index .RepoDigests 0}}' muhrilobianco/ci-deployer:$${TAG}
