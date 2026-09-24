@@ -14,7 +14,8 @@ O backup das lojas (mucommerce) é irmão deste e mora no outro repo:
 | `postgres` | `n8n_queue`, `typebot`, `outline`, `wiki` | serviço `postgres_postgres` |
 | `pgvector` | `api_agents_kb` (KB do agente, com embeddings), `chatwoot_production`, `chatwoot` | serviço `pgvector_pgvector` |
 | `mongo` | `revolt` (Muchat) e `muchat_study` (bot de estudo) | `stoat-database-1` |
-| `arquivos` | mídia e config do Muchat (`data/minio`, `Revolt.toml`, `stoat.json`, `Caddyfile`, `livekit.yml`, `brand/public`), MinIO da plataforma (`outline`, `typebot`, `schedule-artifacts`), volumes (anexos do Chatwoot, avatares do agente, stacks do Portainer) | `/usr/src/stoat`, volumes do Docker |
+| `arquivos` | mídia e config do Muchat (`data/minio`, `Revolt.toml`, `stoat.json`, `Caddyfile`, `livekit.yml`, `brand/public` **sem** `download/`), MinIO da plataforma (`outline`, `typebot`, `schedule-artifacts`), volumes (anexos do Chatwoot, avatares do agente, stacks do Portainer) | `/usr/src/stoat`, volumes do Docker |
+| `artefatos` | feed do Muchat desktop (`Muchat-Setup-*.exe`, `*.apk`, `latest.yml`) por `s3 sync` em `artefatos/`, sem cifrar | `/usr/src/stoat/brand/public/download` |
 
 **Fora, de propósito:** `bolsocoberto` (outro produto — ligue com `INCLUIR_BOLSO=1` se quiser
 junto), os buckets `gazettes` e `emissao-nf` no MinIO (não são da plataforma) e o Redis (efêmero
@@ -22,9 +23,14 @@ por desenho: fila e cache, com o outbox garantindo reentrega).
 
 ## Como funciona
 
-Cada peça vira **um arquivo próprio**, `<nome>-<carimbo UTC>.{sql,tar,archive}.zst.gpg`, no
-prefixo `daily/<peça>/`. Domingo ganha uma cópia em `weekly/` — cópia no servidor, sem subir de
-novo. As quatro decisões que valem lembrar:
+Cada peça vira **um arquivo próprio**, `<nome>-<carimbo UTC>.{sql,tar}.zst.gpg`, no prefixo
+`daily/<peça>/`. Domingo ganha uma cópia em `weekly/` — cópia no servidor, sem subir de novo.
+A exceção é `artefatos`: os instaladores do Muchat desktop são ~360 MB que **nunca mudam** depois
+de publicados (o updater dos clientes confere o sha512 de cada um), então vão por `s3 sync` num
+prefixo próprio, sem cifragem e sem reenvio — o dia seguinte a um release sobe só o arquivo novo.
+São os mesmos bytes que qualquer um baixa do site, e assim o resgate não depende da senha.
+
+As quatro decisões que valem lembrar:
 
 1. **Nunca apaga nada.** A retenção é regra de ciclo de vida no bucket, não do script: assim a
    app key do B2 não precisa de permissão de apagar, e backup que o invasor apaga com a chave que
@@ -81,6 +87,7 @@ gpg --batch --pinentry-mode loopback --passphrase-fd 3 --decrypt ARQUIVO.gpg 3<<
 | `postgres` / `pgvector` | `docker exec -i <container> psql -U postgres -d <db> < restaurado` |
 | `mongo` | `tar -xf restaurado` e, para cada arquivo, `docker exec -i stoat-database-1 mongorestore --archive < <db>.archive` |
 | `arquivos` | `tar -xf restaurado -C <destino>` com o serviço parado |
+| `artefatos` | `aws s3 sync s3://app-muhbianco/artefatos/muchat-download/ /usr/src/stoat/brand/public/download/` (sem decifrar) |
 
 Restaurar Chatwoot, n8n ou Typebot exige derrubar o serviço antes — por isso o ensaio automático
 cobre só o MariaDB, que restaura num banco lateral sem tocar em produção.

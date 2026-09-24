@@ -32,7 +32,7 @@ AWS_IMAGE="${AWS_IMAGE:-amazon/aws-cli:2.37.1}"
 ESTADO="${ESTADO:-/var/lib/muhbianco-backup}"
 DRY_RUN="${DRY_RUN:-0}"
 INCLUIR_BOLSO="${INCLUIR_BOLSO:-0}"
-PECAS="${PECAS:-mariadb postgres pgvector mongo arquivos}"
+PECAS="${PECAS:-mariadb postgres pgvector mongo arquivos artefatos}"
 
 VOLUMES_DIR="${VOLUMES_DIR:-/var/lib/docker/volumes}"
 STOAT_DIR="${STOAT_DIR:-/usr/src/stoat}"
@@ -207,17 +207,19 @@ peca_mongo() {
 
 # ------------------------------------------------------------------ arquivos e volumes
 # Um tar por grupo, com os caminhos que o serviço precisa para voltar a existir.
+# EXCLUIR: caminhos (relativos à base) que ficam de fora deste tar.
 tar_grupo() {
   local nome="$1" base="$2"; shift 2
   local cifrado="$TMP/${nome}-${CARIMBO}.tar.zst.gpg"
-  local existentes=() alvo
+  local existentes=() alvo excluir=()
+  for alvo in ${EXCLUIR:-}; do excluir+=("--exclude=$alvo"); done
   for alvo in "$@"; do
     [ -e "$base/$alvo" ] && existentes+=("$alvo")
   done
   [ ${#existentes[@]} -gt 0 ] || { echo "nada a empacotar em $base para $nome" >&2; return 1; }
 
   echo "[arquivos] $nome: ${existentes[*]}"
-  nice -n 19 ionice -c3 tar -C "$base" -cf - "${existentes[@]}" \
+  nice -n 19 ionice -c3 tar -C "$base" "${excluir[@]}" -cf - "${existentes[@]}" \
     | nice -n 19 zstd -9 -q -c | cifrar "$cifrado"
   local itens
   itens="$(decifrar "$cifrado" | zstd -d -q -c | tar -tf - | wc -l)"
@@ -229,7 +231,9 @@ tar_grupo() {
 peca_arquivos() {
   local erro=0
   # Muchat: mídia do MinIO próprio e a configuração que o Stoat não reconstrói sozinho.
-  tar_grupo muchat "$STOAT_DIR" \
+  # `brand/public/download` fica de fora: são os instaladores publicados, que não mudam e
+  # sobem pela peça `artefatos` (o porquê está lá).
+  EXCLUIR="brand/public/download" tar_grupo muchat "$STOAT_DIR" \
     data/minio Revolt.toml stoat.json Caddyfile livekit.yml brand/public || erro=1
   # MinIO da plataforma: anexos do Outline, do Typebot e os artefatos de agendamento do agente.
   tar_grupo minio-plataforma "$VOLUMES_DIR/minio_data/_data" \
@@ -240,6 +244,46 @@ peca_arquivos() {
     chatwoot_chatwoot_storage/_data api-agents_api_agents_avatars/_data \
     portainer_data/_data || erro=1
   return "$erro"
+}
+
+# ------------------------------------------------------------------ artefatos publicados
+# O feed do electron-updater (`Muchat-Setup-*.exe`, `*.apk`, `latest.yml`): arquivos grandes que
+# **nunca mudam** depois de publicados — o `publish-muchat-desktop.sh` recusa sobrescrever, porque
+# o updater de quem já instalou confere o sha512 de cada um. Perder isso quebra a atualização
+# desses clientes, então precisa de cópia; mas cifrar e reenviar 400 MB por dia é desperdício.
+#
+# Daí `s3 sync` em vez de tar: só sobe o que ainda não está no bucket, então o dia seguinte a um
+# release manda só o arquivo novo. Sem `--delete`: aqui também nada é apagado. Sem cifragem: são
+# exatamente os bytes que qualquer um baixa de chat.muhbianco.com.br, e assim o resgate é copiar
+# de volta, sem depender da senha.
+peca_artefatos() {
+  local origem="$STOAT_DIR/brand/public/download"
+  local locais remotos
+  [ -d "$origem" ] || { echo "sem feed do desktop em $origem" >&2; return 1; }
+
+  echo "[artefatos] feed do Muchat desktop"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "      DRY_RUN=1: sync de $(du -sh "$origem" | cut -f1) não enviado"
+    return 0
+  fi
+
+  docker run --rm \
+    -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+    -v "$origem:/src:ro" \
+    "$AWS_IMAGE" --endpoint-url "$MUHBIANCO_BACKUP_ENDPOINT" \
+    s3 sync /src "s3://${MUHBIANCO_BACKUP_BUCKET}/artefatos/muchat-download/" --only-show-errors
+
+  # Conferência possível para um sync: o bucket não pode ter menos arquivos que o servidor.
+  locais="$(find "$origem" -type f | wc -l)"
+  remotos="$(docker run --rm \
+    -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+    "$AWS_IMAGE" --endpoint-url "$MUHBIANCO_BACKUP_ENDPOINT" \
+    s3api list-objects-v2 --bucket "$MUHBIANCO_BACKUP_BUCKET" \
+    --prefix "artefatos/muchat-download/" --query "length(Contents)" --output text | tr -d "\r")"
+  [ "$remotos" != "None" ] && [ "$remotos" -ge "$locais" ] || {
+    echo "o bucket tem $remotos arquivos e o servidor $locais" >&2; return 1; }
+  echo "      $remotos arquivos no bucket ($locais no servidor)"
+  ENVIADOS+=("artefatos/muchat-download/ ${remotos} arquivos")
 }
 
 for peca in $PECAS; do
