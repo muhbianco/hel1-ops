@@ -96,4 +96,8 @@ cobre só o MariaDB, que restaura num banco lateral sem tocar em produção.
 
 | Data | Arquivo | Resultado |
 |---|---|---|
-| _(preencher no primeiro ensaio)_ | | |
+| 24/09/2026 | `daily/mariadb/api_agents-20260924T155059Z.sql.zst.gpg` (288 KB) | ok — 38 tabelas; `users` 19, `wallets` 13, `user_services` 15, `service_charges` 86, `agent_messages` 1179, iguais à produção |
+
+Primeira execução completa em 24/09/2026: MariaDB, os dois Postgres, o Mongo e os três tars, mais
+o sync de 16 arquivos do feed do desktop. O tar do Muchat passou de 412 MB para 41 MB quando o
+feed saiu dele.
