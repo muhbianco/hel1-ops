@@ -6,7 +6,13 @@ steps:
   shellcheck:
     image: koalaman/shellcheck-alpine:v0.11.0
     commands:
-      - shellcheck -S warning scripts/hel1-deploy scripts/hel1-build scripts/publish-muchat-desktop.sh scripts/prune.sh traefik/apply.sh
+      - >-
+        shellcheck -S warning
+        scripts/hel1-deploy scripts/hel1-build scripts/publish-muchat-desktop.sh
+        scripts/prune.sh scripts/backup-muhbianco.sh
+        scripts/backup-muhbianco-restore-test.sh
+        scripts/set-backup-credentials-muhbianco.sh scripts/install-backup-muhbianco.sh
+        traefik/apply.sh
 
   ruff:
     image: python:3.12-slim

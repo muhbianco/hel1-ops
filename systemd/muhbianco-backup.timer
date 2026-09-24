@@ -1,0 +1,13 @@
+[Unit]
+Description=Backup diário da plataforma MuhBianco
+
+[Timer]
+# 03:45 UTC: depois do mu-tower (03:12) e do mucommerce (03:25). Este é o mais pesado — são
+# quatro tecnologias de banco e três tars — e o último a rodar para não atrapalhar os outros.
+OnCalendar=*-*-* 03:45:00 UTC
+# Servidor desligado na hora marcada não pode significar um dia sem backup.
+Persistent=true
+RandomizedDelaySec=4min
+
+[Install]
+WantedBy=timers.target

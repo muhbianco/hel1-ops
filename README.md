@@ -54,6 +54,8 @@ read-only arquivos que já existem no host:
 | `/root/.portainer-token` | `portainer-stack-update` (commerce, chatwoot) |
 | `/root/.mucommerce.env`, `/root/.mucommerce-minio.env` | migração do commerce |
 | `/usr/src/stoat/.env` (via `/usr/src/stoat` montado) | `docker compose -p stoat` do muchat |
+| `/root/.muhbianco-backup-b2.env` | backup da plataforma (só o job lê; nenhum serviço) |
+| `/root/.mucommerce-backup-b2.env` | backup das lojas (no repo mucommerce) |
 
 Se o push para o Docker Hub falhar por credencial (credential helper no host), criar os secrets
 `docker_username` / `docker_password` no Woodpecker (só evento `push`) e trocar o step para `docker login`.
@@ -115,3 +117,15 @@ python3 scripts/portainer-stack-update.py --stack woodpecker --yaml woodpecker/d
 ## Break-glass (Woodpecker fora do ar)
 O fluxo antigo continua possível: `git pull --ff-only` em `/usr/src/<repo>`, `docker build`/`push`
 com tag `:<sha12>` e `hel1-deploy`/`portainer-stack-update` à mão. Ver a skill `deploy` do workspace.
+
+## Backup da plataforma
+
+`scripts/backup-muhbianco.sh` manda para o Backblaze B2 (bucket `app-muhbianco`) tudo que não
+volta com um `git push`: `api_agents`, os Postgres (n8n, Typebot, Outline, wiki), o pgvector (KB do
+agente e Chatwoot), o Mongo do Muchat — incluindo o bot de estudo — e os arquivos: mídia e config
+do Muchat, MinIO da plataforma e volumes (anexos do Chatwoot, avatares, stacks do Portainer).
+Timer diário às 03:45 UTC. Instalação, retenção e restore: [docs/backup-muhbianco.md](docs/backup-muhbianco.md).
+
+As lojas têm o backup irmão no outro repo (`mucommerce/infra/backup/`, bucket `mu-commerce`) e o
+Mu Tower o seu (`mu-tower/infra/scripts/`). Três jobs, três buckets, três horários — 03:12, 03:25
+e 03:45 UTC — para não disputarem CPU e disco na mesma janela.

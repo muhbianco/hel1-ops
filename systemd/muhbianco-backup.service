@@ -1,0 +1,19 @@
+[Unit]
+Description=Backup cifrado da plataforma MuhBianco para o Backblaze B2
+Documentation=https://github.com/muhbianco/hel1-ops/blob/main/scripts/backup-muhbianco.sh
+After=network-online.target docker.service mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/src/hel1-ops/scripts/backup-muhbianco.sh
+# O script já usa nice/ionice no que pesa; isto cobre o resto do processo.
+Nice=19
+IOSchedulingClass=idle
+# Falha de backup não pode passar em silêncio: fica no journal com o código de saída.
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60min
+
+[Install]
+WantedBy=multi-user.target
