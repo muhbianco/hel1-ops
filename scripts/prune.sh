@@ -5,7 +5,9 @@
 #
 #   - imagens sem uso há mais de 7 dias, exceto as locais (label br.com.muhbianco.local=1);
 #   - das imagens locais (muchat-web etc.), guarda as KEEP_LOCAL tags mais novas por repositório
-#     (rollback) e nunca remove uma imagem em uso;
+#     (rollback) e nunca remove uma imagem em uso. O filtro é awk, não grep: sob `pipefail`, um
+#     grep sem nenhuma linha casada devolve 1 e derruba o script — foi o que aconteceu quando
+#     sobrou só `muchat-web:latest`, e a limpeza de cache abaixo deixou de rodar por dias;
 #   - cache do BuildKit limitado a BUILD_CACHE_MAX (os mais antigos saem primeiro).
 set -euo pipefail
 
@@ -20,7 +22,8 @@ in_use=$(docker ps -a --format '{{.Image}}' | sort -u)
 docker image ls --filter "label=br.com.muhbianco.local=1" --format '{{.Repository}}' | sort -u |
   while read -r repo; do
     docker image ls "$repo" --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' |
-      grep -v ':<none>$' | grep -v ':latest$' | sort -r | tail -n +"$((KEEP_LOCAL + 1))" | cut -d'|' -f2 |
+      awk -F'[|]' '$2 !~ /:(<none>|latest)$/' |
+      sort -r | tail -n +"$((KEEP_LOCAL + 1))" | cut -d'|' -f2 |
       while read -r ref; do
         if printf '%s\n' "$in_use" | grep -qxF "$ref"; then continue; fi
         docker image rm "$ref" >/dev/null && echo "removida $ref" || true
