@@ -60,11 +60,18 @@ def sha(text: str) -> str:
 
 
 def needed_vars(yaml_text: str) -> list[str]:
+    """The `${VARS}` the Portainer Env really has to carry.
+
+    `${VAR:-x}` and `${VAR-x}` bring their own fallback: they are optional by definition, and
+    demanding them aborted a deploy that would have worked. `${VAR}`, `${VAR:?msg}` and
+    `${VAR?msg}` stay required -- the second form exists precisely to demand.
+    """
     # Compose interpolates values, not comments: skip comment lines.
     body_lines = [ln for ln in yaml_text.splitlines() if not ln.lstrip().startswith("#")]
     # `$${...}` is an escaped literal (e.g. a Traefik regex group), not a variable; variable
     # names start with a letter or underscore.
-    return sorted(set(re.findall(r"(?<!\$)\$\{([A-Z_][A-Z0-9_]*)", "\n".join(body_lines))))
+    found = re.findall(r"(?<!\$)\$\{([A-Z_][A-Z0-9_]*)(:?[-?+])?", "\n".join(body_lines))
+    return sorted({name for name, operator in found if operator not in (":-", "-")})
 
 
 def merge_env(env: list[dict], assignments: list[str]) -> str | None:
