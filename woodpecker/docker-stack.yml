@@ -19,8 +19,18 @@
 
 version: "3.8"
 
+# Rotacao de log de todo o stack do Stoat. O padrao do daemon da hel1 cobre o mesmo, mas mora
+# no host e some numa reinstalacao; aqui fica versionado. Teto de 30 MB por container: o Mongo
+# sozinho escrevia 190 MB por dia e chegou a 3,2 GB antes de alguem notar (29/09/2026).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   server:
+    logging: *logging
     image: woodpeckerci/woodpecker-server:v3.18.1
     environment:
       WOODPECKER_HOST: https://ci.muhbianco.com.br
@@ -84,6 +94,7 @@ services:
         - traefik.http.middlewares.woodpecker_headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow
 
   agent:
+    logging: *logging
     image: woodpeckerci/woodpecker-agent:v3.18.1
     environment:
       WOODPECKER_SERVER: woodpecker_server:9000
