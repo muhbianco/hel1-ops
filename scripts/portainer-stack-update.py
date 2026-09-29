@@ -40,6 +40,9 @@ BASE = os.environ.get("PORTAINER_URL", "http://127.0.0.1:9000").rstrip("/")
 TOKEN_PATH = pathlib.Path(os.environ.get("PORTAINER_TOKEN_FILE", "/root/.portainer-token"))
 ENDPOINT_ID = int(os.environ.get("PORTAINER_ENDPOINT_ID", "1"))
 OPTIONAL_EMPTY = {"SENTRY_DSN"}
+#: Nomeados para o patch de YAML nao virar sopa de barra-n dentro de f-string.
+NL = "\n"
+CRLF = "\r\n"
 
 
 def req(method: str, path: str, body: dict | None = None, query: dict | None = None):
@@ -74,6 +77,47 @@ def needed_vars(yaml_text: str) -> list[str]:
     return sorted({name for name, operator in found if operator not in (":-", "-")})
 
 
+LOGGING_ANCHOR = """# Rotacao de log por servico, para nenhum container encher o disco da
+# VPS sozinho. O padrao do daemon cobre o mesmo, mas mora no host e some numa reinstalacao.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+"""
+
+
+def with_logging(yaml_text: str) -> tuple[str, int]:
+    """Acrescenta rotacao de log a cada servico, em memoria.
+
+    Existe porque as stacks com segredo inline (app-site, api-agents, bolso) tem o YAML so no
+    editor do Portainer: baixar para arquivo, editar e reenviar espalharia segredo pelo disco.
+    Aqui o YAML vivo e patchado no caminho entre o GET e o PUT, sem nunca ser impresso nem
+    gravado.
+
+    Idempotente: com a ancora ja presente, devolve o texto intacto e zero.
+    """
+    marca = NL + "services:" + NL
+    if "x-logging:" in yaml_text or marca not in yaml_text:
+        return yaml_text, 0
+    texto = yaml_text.replace(marca, NL + LOGGING_ANCHOR + "services:" + NL, 1)
+    saida: list[str] = []
+    dentro = False
+    postos = 0
+    for linha in texto.split(NL):
+        saida.append(linha)
+        if re.match(r"^services:\s*$", linha):
+            dentro = True
+            continue
+        if dentro and re.match(r"^[A-Za-z]", linha):
+            dentro = False
+        if dentro and re.match(r"^  [A-Za-z][A-Za-z0-9_.-]*:\s*$", linha):
+            saida.append("    logging: *logging")
+            postos += 1
+    return NL.join(saida), postos
+
+
 def merge_env(env: list[dict], assignments: list[str]) -> str | None:
     for item in assignments:
         key, _, value = item.partition("=")
@@ -101,6 +145,11 @@ def main() -> int:
         default=[],
         metavar="KEY",
         help="a ${KEY} the YAML needs that may be empty in the Env (e.g. SMTP not configured yet)",
+    )
+    ap.add_argument(
+        "--patch-logging",
+        action="store_true",
+        help="acrescenta rotacao de log a cada servico do YAML vivo, sem baixar o YAML",
     )
     ap.add_argument("--prune", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -135,6 +184,16 @@ def main() -> int:
         return 2
     live_yaml = file_data.get("StackFileContent", "")
     yaml_text = args.yaml.read_text(encoding="utf-8") if args.yaml else live_yaml
+
+    if args.patch_logging:
+        crlf = CRLF in yaml_text
+        yaml_text, postos = with_logging(yaml_text.replace(CRLF, NL))
+        if crlf:
+            yaml_text = yaml_text.replace(NL, CRLF)
+        print(f"patch-logging: {postos} servicos")
+        if postos == 0 and "x-logging:" not in yaml_text:
+            print("ABORT: nenhum servico casou; o YAML tem outra indentacao")
+            return 3
 
     bad_key = merge_env(env, assignments)
     if bad_key is not None:
