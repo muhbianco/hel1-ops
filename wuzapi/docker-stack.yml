@@ -1,0 +1,109 @@
+# =============================================================================
+# WuzAPI (muconnect) — Stack Portainer (Docker Swarm + Traefik) na hel1
+# Fonte: hel1-ops@main  |  YAML: wuzapi/docker-stack.yml
+# Domínio: muconnect.muhbianco.com.br (DNS A → hel1)
+#
+# Ponte não oficial de WhatsApp (whatsmeow). A infraestrutura anterior foi derrubada em
+# 21/09/2026, antes da apelação na Meta (muhbianco_site/docs/wuzapi-teardown.md): o que pesa
+# contra o portfólio é sessão multi-device ligada aos **números da empresa**. Esta instância
+# existe para números que não sejam os da MuhBianco — ver ADR 0010 do mucommerce.
+#
+# Banco: SQLite no volume `wuzapi_data` (/app/dbdata, users.db + main.db). Sem DB_* no
+# ambiente o WuzAPI cai nesse caminho sozinho. É de propósito: uma conexão só não justifica
+# tocar no Postgres compartilhado do n8n/typebot, e o par volume+stack é isolado e fácil de
+# salvar.
+#
+# Segredos via ${VAR} no Env do Portainer, vindos de /root/.wuzapi.env na hel1:
+#   WUZAPI_ADMIN_TOKEN            `openssl rand -hex 32` — abre /admin/* (criar e listar usuários)
+#   WUZAPI_GLOBAL_ENCRYPTION_KEY  exatamente 32 caracteres (`openssl rand -hex 16`)
+#   WUZAPI_GLOBAL_HMAC_KEY        >= 32 caracteres; assina o webhook de saída
+#
+# Os três são obrigatórios aqui de propósito. Sem eles o WuzAPI **gera sozinho** a chave de
+# cifragem, **imprime no log** e troca a cada restart — o que quer dizer perder o acesso ao
+# que já estava cifrado, com o segredo vazado no caminho.
+#
+# Criar/atualizar SEM passar segredo pelo chat:
+#   python3 scripts/portainer-stack-update.py --create --stack wuzapi \
+#     --yaml wuzapi/docker-stack.yml --env-file /root/.wuzapi.env --dry-run
+# =============================================================================
+
+version: "3.8"
+
+# Rotação de log versionada junto da stack: o padrão do daemon da hel1 cobre o mesmo, mas mora
+# no host e some numa reinstalação.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  wuzapi:
+    logging: *logging
+    image: asternic/wuzapi:1.0.9
+    environment:
+      WUZAPI_ADMIN_TOKEN: ${WUZAPI_ADMIN_TOKEN:?WUZAPI_ADMIN_TOKEN obrigatorio}
+      WUZAPI_GLOBAL_ENCRYPTION_KEY: ${WUZAPI_GLOBAL_ENCRYPTION_KEY:?WUZAPI_GLOBAL_ENCRYPTION_KEY obrigatorio}
+      WUZAPI_GLOBAL_HMAC_KEY: ${WUZAPI_GLOBAL_HMAC_KEY:?WUZAPI_GLOBAL_HMAC_KEY obrigatorio}
+      WUZAPI_PORT: "8080"
+      TZ: America/Sao_Paulo
+      # Nome que aparece em "Aparelhos conectados" no celular pareado.
+      SESSION_DEVICE_NAME: MuConnect
+      WEBHOOK_FORMAT: json
+      WEBHOOK_RETRY_ENABLED: "true"
+      WEBHOOK_RETRY_COUNT: "3"
+      WEBHOOK_RETRY_DELAY_SECONDS: "5"
+      LOG_LEVEL: info
+      # Precisa de disco com trava de arquivo; tmpfs quebra o download de mídia.
+      WUZAPI_MEDIA_TMPDIR: /app/tmp
+      WUZAPI_MEDIA_CONCURRENCY: "2"
+    volumes:
+      - wuzapi_data:/app/dbdata
+      - wuzapi_tmp:/app/tmp
+    networks:
+      - chatbot-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        order: stop-first
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=chatbot-net
+        - traefik.http.routers.wuzapi.rule=Host(`muconnect.muhbianco.com.br`)
+        - traefik.http.routers.wuzapi.entrypoints=websecure
+        - traefik.http.routers.wuzapi.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.wuzapi.priority=20
+        - traefik.http.routers.wuzapi.service=wuzapi
+        - traefik.http.routers.wuzapi.middlewares=wuzapi_headers
+        - traefik.http.services.wuzapi.loadbalancer.server.port=8080
+        - traefik.http.services.wuzapi.loadbalancer.passHostHeader=true
+        - traefik.http.middlewares.wuzapi_headers.headers.stsSeconds=31536000
+        - traefik.http.middlewares.wuzapi_headers.headers.stsIncludeSubdomains=true
+        - traefik.http.middlewares.wuzapi_headers.headers.contentTypeNosniff=true
+        - traefik.http.middlewares.wuzapi_headers.headers.referrerPolicy=no-referrer
+        - traefik.http.middlewares.wuzapi_headers.headers.customFrameOptionsValue=DENY
+        - traefik.http.middlewares.wuzapi_headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow
+
+networks:
+  chatbot-net:
+    external: true
+
+volumes:
+  wuzapi_data:
+  wuzapi_tmp:
