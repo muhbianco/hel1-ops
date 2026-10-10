@@ -1,7 +1,9 @@
 # =============================================================================
 # WuzAPI (muconnect) — Stack Portainer (Docker Swarm + Traefik) na hel1
 # Fonte: hel1-ops@main  |  YAML: wuzapi/docker-stack.yml
-# Domínio: muconnect.muhbianco.com.br (DNS A → hel1)
+# Domínio: muconnect.muhbianco.com.br (DNS A → hel1) — **sem rota no Traefik por padrão**,
+# ver `WUZAPI_EXPOSE` nas labels. O DNS continua apontando para a hel1; sem rota, o Traefik
+# responde 404 e a interface só existe dentro da `chatbot-net`.
 #
 # Ponte não oficial de WhatsApp (whatsmeow). A infraestrutura anterior foi derrubada em
 # 21/09/2026, antes da apelação na Meta (muhbianco_site/docs/wuzapi-teardown.md): o que pesa
@@ -83,7 +85,17 @@ services:
           cpus: "0.50"
           memory: 512M
       labels:
-        - traefik.enable=true
+        # Fechada por padrão. A WuzAPI não tem motivo para existir na internet: quem fala com
+        # ela é a api-agents, por `http://wuzapi:8080` dentro da `chatbot-net`. O cliente nunca
+        # fala direto — se falasse, enxergaria os números dos outros (é o que `config.py` já
+        # dizia e a stack não cumpria: até 10/10/2026 o dashboard respondia 200 em
+        # `https://muconnect.muhbianco.com.br/`).
+        #
+        # Para abrir a interface quando o dono precisar: `WUZAPI_EXPOSE=true` no Env da stack
+        # (`portainer-stack-update.py --stack wuzapi --env-file /root/.wuzapi.env`) e **tirar
+        # de novo** ao terminar. Sem a variável, o `:-false` mantém fechado — se a
+        # interpolação falhar, falha fechando, que é o lado certo para errar.
+        - traefik.enable=${WUZAPI_EXPOSE:-false}
         - traefik.swarm.network=chatbot-net
         - traefik.http.routers.wuzapi.rule=Host(`muconnect.muhbianco.com.br`)
         - traefik.http.routers.wuzapi.entrypoints=websecure
