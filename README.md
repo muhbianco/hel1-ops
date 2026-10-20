@@ -129,3 +129,23 @@ Timer diário às 03:45 UTC. Instalação, retenção e restore: [docs/backup-mu
 As lojas têm o backup irmão no outro repo (`mucommerce/infra/backup/`, bucket `mu-commerce`) e o
 Mu Tower o seu (`mu-tower/infra/scripts/`). Três jobs, três buckets, três horários — 03:12, 03:25
 e 03:45 UTC — para não disputarem CPU e disco na mesma janela.
+
+## Firewall do host (`mb-guard`)
+
+`systemd/mb-guard.nft` (em `/etc/nftables.d/`) é a tabela `inet mb_guard`, carregada pela unit
+`systemd/mb-guard.service`. Ela derruba o que chega pela `eth0` nas portas que só servem dentro da
+hel1: 3306 (MariaDB, use túnel SSH), 9000 (Portainer por HTTP; o acesso é por
+`https://portainer.muhbianco.com.br`) e 2377/tcp, 7946/tcp+udp e 4789/udp (Swarm de um nó só).
+Público fica só 22, 80/443 (Traefik) e o Muchat: 7881/tcp, 7882/udp, 3478/tcp+udp.
+
+Porta publicada pelo Docker passa por DNAT e não pelo hook `input`. Por isso a 9000 tem regra também
+na cadeia `forward` (IPv4). No IPv6 quem atende é o `docker-proxy`, que o `input` já pega.
+
+```bash
+# na hel1, como root, com o arquivo do commit em /root/mb-guard.nft
+nft -c -f /root/mb-guard.nft
+install -m 644 /root/mb-guard.nft /etc/nftables.d/mb-guard.nft && systemctl restart mb-guard
+nft list table inet mb_guard
+```
+
+Para pôr um segundo nó no Swarm, libere o endereço dele antes de rodar o `join`.

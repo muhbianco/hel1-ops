@@ -1,0 +1,24 @@
+# Managed by muhbianco infra (source: hel1-ops/systemd/mb-guard.nft, installed at
+# /etc/nftables.d/mb-guard.nft). Blocks public access to host services that must stay private.
+# Only traffic entering via eth0 matches: containers (docker0/docker_gwbridge/overlay),
+# loopback and SSH tunnels are never affected.
+table inet mb_guard
+delete table inet mb_guard
+table inet mb_guard {
+  chain input {
+    type filter hook input priority -5; policy accept;
+    iifname "eth0" tcp dport 3306 counter drop comment "mariadb: use ssh tunnel"
+    # Portainer over IPv6 lands on the host's docker-proxy (no ip6 DNAT here), so input sees it.
+    iifname "eth0" tcp dport 9000 counter drop comment "portainer: use https://portainer.muhbianco.com.br"
+    # Single-node Swarm: management, gossip and VXLAN never need to leave the host.
+    # Adding a node means allowing its address here first.
+    iifname "eth0" tcp dport 2377 counter drop comment "swarm: management"
+    iifname "eth0" meta l4proto { tcp, udp } th dport 7946 counter drop comment "swarm: gossip"
+    iifname "eth0" udp dport 4789 counter drop comment "swarm: vxlan"
+  }
+  chain forward {
+    type filter hook forward priority -5; policy accept;
+    # Portainer over IPv4 is DNATed by Docker to the container and skips the input hook.
+    iifname "eth0" meta l4proto tcp ct original proto-dst 9000 counter drop comment "portainer: published port"
+  }
+}

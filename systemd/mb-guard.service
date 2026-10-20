@@ -1,0 +1,13 @@
+[Unit]
+Description=MuhBianco host firewall guard (nftables table inet mb_guard)
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/mb-guard.nft
+ExecStop=/usr/sbin/nft delete table inet mb_guard
+
+[Install]
+WantedBy=multi-user.target
