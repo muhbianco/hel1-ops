@@ -8,7 +8,7 @@
 # Credenciais em /root/.muhbianco-backup-b2.env (600), instaladas pelo
 # `set-backup-credentials-muhbianco.sh`. Nenhum valor aparece na saída nem na linha de comando.
 #
-# Mesmo desenho do backup do mu-tower e do mucommerce: nunca apaga nada (retenção é regra de
+# Mesmo desenho do backup do mucommerce: nunca apaga nada (retenção é regra de
 # ciclo de vida no bucket, e chave que apaga backup não protege contra invasor), confere
 # decifrando antes de enviar, senha por descritor de arquivo, chaves do B2 no contêiner por nome.
 #

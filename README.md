@@ -126,9 +126,8 @@ agente e Chatwoot), o Mongo do Muchat — incluindo o bot de estudo — e os arq
 do Muchat, MinIO da plataforma e volumes (anexos do Chatwoot, avatares, stacks do Portainer).
 Timer diário às 03:45 UTC. Instalação, retenção e restore: [docs/backup-muhbianco.md](docs/backup-muhbianco.md).
 
-As lojas têm o backup irmão no outro repo (`mucommerce/infra/backup/`, bucket `mu-commerce`) e o
-Mu Tower o seu (`mu-tower/infra/scripts/`). Três jobs, três buckets, três horários — 03:12, 03:25
-e 03:45 UTC — para não disputarem CPU e disco na mesma janela.
+As lojas têm o backup irmão no outro repo (`mucommerce/infra/backup/`, bucket `mu-commerce`), às
+03:25 UTC — cada job no seu bucket e no seu horário, para não disputarem CPU e disco na mesma janela.
 
 ## Firewall do host (`mb-guard`)
 
