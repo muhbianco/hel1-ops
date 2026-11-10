@@ -32,10 +32,11 @@ AWS_IMAGE="${AWS_IMAGE:-amazon/aws-cli:2.37.1}"
 ESTADO="${ESTADO:-/var/lib/muhbianco-backup}"
 DRY_RUN="${DRY_RUN:-0}"
 INCLUIR_BOLSO="${INCLUIR_BOLSO:-0}"
-PECAS="${PECAS:-mariadb postgres pgvector mongo arquivos artefatos}"
+PECAS="${PECAS:-mariadb postgres pgvector mongo ytfamily arquivos artefatos}"
 
 VOLUMES_DIR="${VOLUMES_DIR:-/var/lib/docker/volumes}"
 STOAT_DIR="${STOAT_DIR:-/usr/src/stoat}"
+YT_VOLUME="${YT_VOLUME:-yt-family_data}"
 
 # Bancos por servidor. Nome do container resolvido na hora: o Swarm troca o sufixo a cada deploy.
 PG_DBS="${PG_DBS:-n8n_queue typebot outline wiki}"
@@ -203,6 +204,84 @@ peca_mongo() {
   echo "      $itens arquivos conferidos"
   rm -rf "$bruto" "$dir"
   enviar "$cifrado" "mongo"
+}
+
+# ------------------------------------------------------------------ SQLite do yt-family
+# Abre o arquivo só para leitura e sem tocar nele (`immutable=1`: sem trava e sem criar -wal/-shm
+# ao lado) e confere `PRAGMA integrity_check` e as tabelas do esquema inicial. Imprime as contagens.
+# python3 porque a hel1 não tem o `sqlite3` de linha de comando.
+conferir_sqlite_yt() {
+  python3 -I - "$1" <<'PY'
+import sqlite3
+import sys
+from urllib.parse import quote
+
+TABLES = ("members", "payments", "credits", "subscriptions")
+path = sys.argv[1]
+try:
+    con = sqlite3.connect(f"file:{quote(path)}?mode=ro&immutable=1", uri=True)
+    try:
+        check = [row[0] for row in con.execute("PRAGMA integrity_check")]
+        names = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        missing = [t for t in TABLES if t not in names]
+        counts = {t: con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in TABLES if t in names}
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        con.close()
+except sqlite3.Error as exc:
+    print(f"o SQLite recusou {path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+if check != ["ok"]:
+    print("integrity_check: " + "; ".join(check[:5]), file=sys.stderr)
+    sys.exit(1)
+if missing:
+    print("faltam tabelas: " + ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+print(f"esquema v{version}; " + " ".join(f"{t}={n}" for t, n in counts.items()))
+PY
+}
+
+# O livro de créditos do portal da família Premium (meses pagos, estornos, ajustes, histórico do MP).
+# O app grava em WAL: o `yt.db` do volume sozinho não é o banco (o que acabou de entrar mora no
+# `-wal`), e copiar os três arquivos vivos pega um meio-termo. A fonte é a cópia diária que o
+# próprio app faz com a API de backup do SQLite (`/data/backups/yt-AAAA-MM-DD.db`, uma por dia UTC,
+# logo depois da meia-noite, 14 guardadas): consistente e sem entrar no contêiner. O preço é o
+# RPO — o B2 fica com o livro da meia-noite UTC; o resto se refaz pelo histórico do Mercado Pago.
+peca_ytfamily() {
+  local base origem dia contagens bruto cifrado volta
+  command -v python3 >/dev/null || { echo "python3 não encontrado" >&2; return 1; }
+  base="$(docker volume inspect "$YT_VOLUME" --format '{{.Mountpoint}}')" || base=""
+  [ -n "$base" ] || { echo "volume $YT_VOLUME não encontrado" >&2; return 1; }
+  # `-mmin +1`: a cópia mexida no último minuto pode ser a do dia ainda sendo escrita (contêiner
+  # que acabou de subir); nesse caso vai a de ontem. Os nomes ordenam por data.
+  origem="$(find "$base/backups" -maxdepth 1 -type f -name 'yt-????-??-??.db' -mmin +1 \
+    | sort | tail -1)"
+  [ -n "$origem" ] || { echo "nenhuma cópia diária em $base/backups" >&2; return 1; }
+  dia="$(basename "$origem" .db)"
+  dia="${dia#yt-}"
+  echo "[ytfamily] $(basename "$origem")"
+
+  bruto="$TMP/yt.db"
+  volta="$TMP/yt-volta.db"
+  cifrado="$TMP/yt-family-${CARIMBO}.db.zst.gpg"
+  cp "$origem" "$bruto" || return 1
+  contagens="$(conferir_sqlite_yt "$bruto")" || {
+    echo "a cópia do app não passa na conferência; nada foi enviado" >&2; return 1; }
+  echo "      $(stat -c %s "$bruto") bytes; $contagens"
+  nice -n 19 zstd -9 -q -c "$bruto" | cifrar "$cifrado"
+  decifrar "$cifrado" | zstd -d -q -c >"$volta"
+  cmp -s "$bruto" "$volta" || {
+    echo "o banco cifrado não volta igual; nada foi enviado" >&2; return 1; }
+  rm -f "$bruto" "$volta"
+  enviar "$cifrado" "ytfamily" || return 1
+
+  # Enviada a cópia, a idade dela: o laço do app que grava as cópias pode parar sem derrubar o
+  # portal, e aí o B2 receberia o mesmo livro velho todo dia sem ninguém notar.
+  case "$dia" in
+    "$(date -u +%F)" | "$(date -u -d yesterday +%F)") ;;
+    *) echo "a cópia diária mais recente do yt-family é de $dia: o app parou de gravá-las?" >&2
+       return 1 ;;
+  esac
 }
 
 # ------------------------------------------------------------------ arquivos e volumes

@@ -122,7 +122,8 @@ com tag `:<sha12>` e `hel1-deploy`/`portainer-stack-update` à mão. Ver a skill
 
 `scripts/backup-muhbianco.sh` manda para o Backblaze B2 (bucket `app-muhbianco`) tudo que não
 volta com um `git push`: `api_agents`, os Postgres (n8n, Typebot, Outline, wiki), o pgvector (KB do
-agente e Chatwoot), o Mongo do Muchat — incluindo o bot de estudo — e os arquivos: mídia e config
+agente e Chatwoot), o Mongo do Muchat — incluindo o bot de estudo —, o SQLite do portal da família
+Premium (`yt-family`, pela cópia diária que o app grava no volume) e os arquivos: mídia e config
 do Muchat, MinIO da plataforma e volumes (anexos do Chatwoot, avatares, stacks do Portainer).
 Timer diário às 03:45 UTC. Instalação, retenção e restore: [docs/backup-muhbianco.md](docs/backup-muhbianco.md).
 

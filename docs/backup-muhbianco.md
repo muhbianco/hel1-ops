@@ -14,6 +14,7 @@ O backup das lojas (mucommerce) é irmão deste e mora no outro repo:
 | `postgres` | `n8n_queue`, `typebot`, `outline`, `wiki` | serviço `postgres_postgres` |
 | `pgvector` | `api_agents_kb` (KB do agente, com embeddings), `chatwoot_production`, `chatwoot` | serviço `pgvector_pgvector` |
 | `mongo` | `revolt` (Muchat) e `muchat_study` (bot de estudo) | `stoat-database-1` |
+| `ytfamily` | SQLite do portal da família Premium (`yt.muhbianco.com.br`): membros, pagamentos, **livro de créditos**, assinaturas — a cópia diária que o próprio app grava | volume `yt-family_data` (`backups/yt-AAAA-MM-DD.db`) |
 | `arquivos` | mídia e config do Muchat (`data/minio`, `Revolt.toml`, `stoat.json`, `Caddyfile`, `livekit.yml`, `brand/public` **sem** `download/`), MinIO da plataforma (`outline`, `typebot`, `schedule-artifacts`), volumes (anexos do Chatwoot, avatares do agente, stacks do Portainer) | `/usr/src/stoat`, volumes do Docker |
 | `artefatos` | feed do Muchat desktop (`Muchat-Setup-*.exe`, `*.apk`, `latest.yml`) por `s3 sync` em `artefatos/`, sem cifrar | `/usr/src/stoat/brand/public/download` |
 
@@ -23,12 +24,24 @@ por desenho: fila e cache, com o outbox garantindo reentrega).
 
 ## Como funciona
 
-Cada peça vira **um arquivo próprio**, `<nome>-<carimbo UTC>.{sql,tar}.zst.gpg`, no prefixo
+Cada peça vira **um arquivo próprio**, `<nome>-<carimbo UTC>.{sql,tar,db}.zst.gpg`, no prefixo
 `daily/<peça>/`. Domingo ganha uma cópia em `weekly/` — cópia no servidor, sem subir de novo.
 A exceção é `artefatos`: os instaladores do Muchat desktop são ~360 MB que **nunca mudam** depois
 de publicados (o updater dos clientes confere o sha512 de cada um), então vão por `s3 sync` num
 prefixo próprio, sem cifragem e sem reenvio — o dia seguinte a um release sobe só o arquivo novo.
 São os mesmos bytes que qualquer um baixa do site, e assim o resgate não depende da senha.
+
+`ytfamily` não copia o banco vivo. O app grava em WAL, então o `yt.db` do volume sozinho não é o
+banco (o que acabou de entrar mora no `yt.db-wal`), e copiar os três arquivos com o app escrevendo
+pega um meio-termo. A fonte é a cópia diária que o próprio app faz com a API de backup do SQLite,
+logo depois da meia-noite UTC (`backups/yt-AAAA-MM-DD.db`, 14 guardadas no volume): consistente e
+sem `docker exec`. O job acha o volume por `docker volume inspect yt-family_data`, pega a mais nova
+que não foi mexida no último minuto (a do dia pode estar sendo escrita por um contêiner que acabou
+de subir), confere `integrity_check` e as tabelas, cifra e confere decifrando **byte a byte**.
+Se a mais nova for de antes de ontem, ela sobe mesmo assim e a peça fecha em erro: é o sinal de que
+o laço do app que grava as cópias parou. O preço é o RPO — o B2 fica com o livro da meia-noite UTC;
+pagamento que entrou depois se refaz pela importação do histórico do Mercado Pago no admin (ajuste
+manual feito depois, não).
 
 As quatro decisões que valem lembrar:
 
@@ -69,10 +82,17 @@ lixo cifrado. Guarde uma cópia no gerenciador de senhas.
 
 ## Restore
 
-**Ensaio automático (mensal):** `bash scripts/backup-muhbianco-restore-test.sh` baixa o dump mais
-recente de `api_agents`, decifra e restaura em `api_agents_restore_check`, comparando as contagens
-de `users`, `wallets`, `user_services`, `service_charges` e `agent_messages`. O destino é fixo e
-termina em `_restore_check`; o script recusa qualquer outro.
+**Ensaio automático (mensal):** `bash scripts/backup-muhbianco-restore-test.sh` roda dois ensaios
+(`ENSAIOS=mariadb` ou `ENSAIOS=ytfamily` para um só):
+
+- `mariadb`: baixa o dump mais recente de `api_agents`, decifra e restaura em
+  `api_agents_restore_check`, comparando as contagens de `users`, `wallets`, `user_services`,
+  `service_charges` e `agent_messages`. O destino é fixo e termina em `_restore_check`; o script
+  recusa qualquer outro.
+- `ytfamily`: baixa o SQLite mais recente, decifra num diretório temporário e o abre: exige
+  `PRAGMA integrity_check` = `ok` e as tabelas `members`, `payments`, `credits` e `subscriptions`,
+  com as contagens lado a lado com a cópia diária mais nova do volume (aberta com `immutable=1`,
+  sem trava nem arquivo novo no volume; o banco vivo não é tocado).
 
 **Na mão, por peça** (baixe o arquivo do bucket, decifre e restaure):
 
@@ -86,11 +106,13 @@ gpg --batch --pinentry-mode loopback --passphrase-fd 3 --decrypt ARQUIVO.gpg 3<<
 | `mariadb` | `mariadb <schema> < restaurado` |
 | `postgres` / `pgvector` | `docker exec -i <container> psql -U postgres -d <db> < restaurado` |
 | `mongo` | `tar -xf restaurado` e, para cada arquivo, `docker exec -i stoat-database-1 mongorestore --archive < <db>.archive` |
+| `ytfamily` | `docker service scale yt-family_app=0`; no volume (`docker volume inspect yt-family_data`), guardar o `yt.db` atual à parte, **apagar `yt.db-wal` e `yt.db-shm`** (um `-wal` velho seria reaplicado sobre o banco restaurado), `install -o 1001 -g 1001 -m 644 restaurado <volume>/yt.db`; `docker service scale yt-family_app=1` |
 | `arquivos` | `tar -xf restaurado -C <destino>` com o serviço parado |
 | `artefatos` | `aws s3 sync s3://app-muhbianco/artefatos/muchat-download/ /usr/src/stoat/brand/public/download/` (sem decifrar) |
 
 Restaurar Chatwoot, n8n ou Typebot exige derrubar o serviço antes — por isso o ensaio automático
-cobre só o MariaDB, que restaura num banco lateral sem tocar em produção.
+cobre só o MariaDB, que restaura num banco lateral sem tocar em produção, e o SQLite do yt-family,
+que se confere abrindo o arquivo.
 
 ## Ensaios feitos
 
