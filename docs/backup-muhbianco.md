@@ -119,7 +119,11 @@ que se confere abrindo o arquivo.
 | Data | Arquivo | Resultado |
 |---|---|---|
 | 24/09/2026 | `daily/mariadb/api_agents-20260924T155059Z.sql.zst.gpg` (288 KB) | ok — 38 tabelas; `users` 19, `wallets` 13, `user_services` 15, `service_charges` 86, `agent_messages` 1179, iguais à produção |
+| 10/11/2026 | `daily/ytfamily/yt-family-20261110T193103Z.db.zst.gpg` (1,9 KB; banco de 100 KB) | ok — `integrity_check` ok, esquema v1; `members` 2, `payments` 0, `credits` 0, `subscriptions` 0, iguais à cópia `yt-2026-11-10.db` do volume (portal no ar desde o mesmo dia) |
 
 Primeira execução completa em 24/09/2026: MariaDB, os dois Postgres, o Mongo e os três tars, mais
 o sync de 16 arquivos do feed do desktop. O tar do Muchat passou de 412 MB para 41 MB quando o
 feed saiu dele.
+
+A peça `ytfamily` entrou em 10/11/2026 (`ed981f3`); o primeiro envio foi à mão, só dela
+(`PECAS=ytfamily`, com `ESTADO` temporário para não trocar o `last-success` da rodada completa).
