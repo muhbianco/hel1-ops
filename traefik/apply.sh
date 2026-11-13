@@ -174,6 +174,16 @@ for host in "${HOSTS[@]}"; do
   printf '  %-40s https=%s%s\n' "$host" "$code" "$([ "$code" = 000 ] && echo ' (TLS/conexão falhou)')"
 done
 
+# Só a task nova: a antiga ainda grava alguns segundos depois de $start, com a config anterior.
+# Só contagem, nunca o conteúdo: a linha com query pode ter credencial.
+echo "--- access log da task nova (só contagem; o caminho não pode ter query string)"
+task="$(docker service ps "$SERVICE" --filter desired-state=running -q | head -n 1)"
+[ -n "$task" ] || task="$SERVICE"
+docker service logs --since "$start" --no-task-ids "$task" 2>&1 |
+  awk -F'"' '$2 ~ / HTTP\// { n++; if ($2 ~ /\?/) q++ }
+    END { printf "  linhas=%d com_query=%d\n", n, q; exit (q > 0) }' ||
+  echo "AVISO: o access log ainda grava query string; ver traefik/README.md (Access log)"
+
 cp -p "$APPLIED" "$APPLIED.$(date +%Y%m%d%H%M%S).bak"
 cp "$FILE" "$APPLIED"
 echo "apply ok. $APPLIED atualizado (backup ao lado)."

@@ -40,6 +40,37 @@ Trocar o token: atualizar `/root/.mucommerce.env` e o Env da stack `commerce`, f
 `commerce` e rodar `apply.sh`. Entre um passo e outro, o provider recebe 401 e o Traefik segue com
 a última config boa.
 
+## Access log
+
+O access log vai para o stdout do serviço (`docker service logs traefik_traefik`, também visível no
+Portainer), em formato common, com rotação do `json-file` do Docker (10 MB × 3, cerca de 4 dias de
+tráfego). Ele grava o caminho, **sem query string**
+(`--accesslog.fields.queryParameters.defaultMode=drop`). Antes da flag gravava. Na medição de
+13/11/2026, os 4 dias guardados tinham na query: token de sessão do Stoat (`/ws?token=`, 35 linhas), JWT do LiveKit
+(`/livekit/rtc/v1?access_token=`, 14), `access_token` do webhook do Woodpecker (`/api/hook`, 9) e
+`code`/`state` do OAuth do yt-family (3).
+
+Referer e User-Agent saem `"-"`: os headers ficam em drop por padrão (`accesslog.fields.headers`),
+e o Referer pode levar a query da página. A flag foi conferida no código da v3.7.10
+(`pkg/middlewares/accesslog/logger.go` monta o `RequestPath` sem `RawQuery`) e num Traefik local
+com a mesma linha de comando. Ao trocar a versão do Traefik, repetir esse teste.
+
+Regras, cobradas por `traefik/test_docker_stack.py` no CI:
+
+- com access log ligado, a query fica em `drop`;
+- nenhum header em `keep`;
+- `--log.level` nunca DEBUG/TRACE.
+
+O apply conta (só conta) as linhas da task nova com query no caminho e avisa se houver alguma.
+Conferir à mão:
+
+```bash
+docker service logs --since 10m --no-task-ids traefik_traefik 2>&1 |
+  awk -F'"' '$2 ~ / HTTP\// {n++; if ($2 ~ /\?/) q++} END {printf "linhas=%d com_query=%d\n", n, q}'
+```
+
+Nunca imprimir as linhas que casam, só contar: são justamente as que têm credencial.
+
 ## Falhas
 
 - API fora do ar ou 401: o Traefik loga o erro e mantém a última config em memória; hosts de labels

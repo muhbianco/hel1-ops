@@ -18,13 +18,15 @@ steps:
     image: python:3.12-slim
     commands:
       - pip install --quiet --disable-pip-version-check ruff==0.16.0
-      - ruff check scripts
-      - ruff format --check scripts
+      - ruff check scripts traefik
+      - ruff format --check scripts traefik
 
   # `needed_vars` decide se um deploy roda: errar ali para a producao inteira. Um bug de
-  # parser dela ja abortou deploy que teria funcionado, entao virou o unico teste do repo.
+  # parser dela ja abortou deploy que teria funcionado, entao virou o primeiro teste do repo.
+  # O de traefik/ cobra o que a borda pode gravar no log (query string, headers, DEBUG). Ele
+  # mora fora de scripts/ de proposito: scripts/** rebuilda a ci-deployer:1 (deployer.yaml).
   pytest:
     image: python:3.12-slim
     commands:
       - pip install --quiet --disable-pip-version-check pytest==8.4.2
-      - python -m pytest -q scripts/tests
+      - python -m pytest -q scripts/tests traefik

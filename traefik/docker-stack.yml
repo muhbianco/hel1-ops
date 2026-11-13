@@ -41,6 +41,12 @@ services:
       - "--log.level=INFO"
       - "--log.format=common"
       - "--accesslog=true"
+      # Query string fora do access log: os clientes põem credencial nela (token de sessão do
+      # Stoat em /ws, JWT do LiveKit, access_token do webhook do Woodpecker, code do OAuth).
+      # O caminho continua no log. Referer e User-Agent já saem "-" porque os headers ficam em
+      # drop por padrão: não ligar `accesslog.fields.headers` sem rever isso. Regra cobrada por
+      # traefik/test_docker_stack.py.
+      - "--accesslog.fields.queryParameters.defaultMode=drop"
     volumes:
       - "vol_certificates:/etc/traefik/letsencrypt"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
