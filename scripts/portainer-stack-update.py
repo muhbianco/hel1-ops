@@ -14,6 +14,15 @@ from the host (or from a CI step that mounts the token file).
 `--env-file` merges KEY=VALUE lines from a host file into the stack Env, so secrets go
 file → Portainer directly.
 
+`--yaml-replace OLD NEW COUNT` changes one line of config in a stack whose YAML (with inline
+secrets) lives only in Portainer, e.g. closing Typebot sign-up or pinning an image by digest:
+
+  portainer-stack-update.py --stack typebot \
+      --yaml-replace DISABLE_SIGNUP=false DISABLE_SIGNUP=true 2 --dry-run
+
+The count is required and checked; re-running is a no-op. OLD/NEW are printed, so never secrets.
+Note every update re-pulls images: pin `:latest` by digest in the same run, or it upgrades.
+
 Prints only stack id, env KEY names, which ${VARS} the YAML needs, sha256 of the YAML
 and the HTTP status. Never prints env values or YAML content.
 
@@ -118,6 +127,39 @@ def with_logging(yaml_text: str) -> tuple[str, int]:
     return NL.join(saida), postos
 
 
+def replace_exact(yaml_text: str, old: str, new: str, count: int) -> tuple[str, str]:
+    """Troca `old` por `new` no YAML vivo, exigindo exatamente `count` ocorrências.
+
+    Serve para mudar uma linha de configuração nas stacks com segredo inline (Typebot, MinIO,
+    n8n), cujo YAML só existe no Portainer: o texto é trocado entre o GET e o PUT e nunca é
+    impresso. `old` e `new` vêm da linha de comando, então nunca podem carregar segredo.
+
+    Idempotente: se `old` sumiu e `new` já aparece `count` vezes, devolve o texto intacto.
+    Contagem diferente da esperada aborta, porque significa que o YAML não é o que se pensa.
+    Devolve (texto, situação) com situação em {"trocado", "ja aplicado"} ou a mensagem de erro
+    começando por "ABORT".
+    """
+    if NL in old or NL in new or "\r" in old or "\r" in new:
+        return yaml_text, "ABORT: --yaml-replace aceita só uma linha"
+    if not old or old == new:
+        return yaml_text, "ABORT: --yaml-replace precisa de OLD não vazio e diferente de NEW"
+    if count < 1:
+        return yaml_text, "ABORT: --yaml-replace precisa de COUNT >= 1"
+    # Num pin de imagem, OLD é prefixo de NEW: as ocorrências de OLD dentro de um NEW já
+    # aplicado não contam, senão a segunda rodada pinaria duas vezes.
+    done = yaml_text.count(new) if new else 0
+    loose = yaml_text.count(old) - done * new.count(old)
+    if loose == 0 and done == count:
+        return yaml_text, "ja aplicado"
+    if loose != count:
+        return yaml_text, f"ABORT: OLD aparece {loose} vez(es), esperado {count}"
+    if done:
+        marker = "\0psu-yaml-replace\0"
+        protected = yaml_text.replace(new, marker)
+        return protected.replace(old, new).replace(marker, new), "trocado"
+    return yaml_text.replace(old, new), "trocado"
+
+
 def merge_env(env: list[dict], assignments: list[str]) -> str | None:
     for item in assignments:
         key, _, value = item.partition("=")
@@ -150,6 +192,14 @@ def main() -> int:
         "--patch-logging",
         action="store_true",
         help="acrescenta rotacao de log a cada servico do YAML vivo, sem baixar o YAML",
+    )
+    ap.add_argument(
+        "--yaml-replace",
+        nargs=3,
+        action="append",
+        default=[],
+        metavar=("OLD", "NEW", "COUNT"),
+        help="troca exata no YAML vivo (uma linha, COUNT ocorrências exigidas); nunca com segredo",
     )
     ap.add_argument("--prune", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -193,6 +243,15 @@ def main() -> int:
         print(f"patch-logging: {postos} servicos")
         if postos == 0 and "x-logging:" not in yaml_text:
             print("ABORT: nenhum servico casou; o YAML tem outra indentacao")
+            return 3
+
+    for old, new, count_text in args.yaml_replace:
+        if not count_text.isdigit():
+            print("ABORT: COUNT do --yaml-replace tem de ser inteiro")
+            return 3
+        yaml_text, status = replace_exact(yaml_text, old, new, int(count_text))
+        print(f"yaml-replace: {old!r} -> {new!r} x{count_text}: {status}")
+        if status.startswith("ABORT"):
             return 3
 
     bad_key = merge_env(env, assignments)
