@@ -42,7 +42,7 @@ YT_VOLUME="${YT_VOLUME:-yt-family_data}"
 PG_DBS="${PG_DBS:-n8n_queue typebot outline wiki}"
 PGVECTOR_DBS="${PGVECTOR_DBS:-api_agents_kb chatwoot_production chatwoot}"
 MARIA_SCHEMAS="${MARIA_SCHEMAS:-api_agents}"
-MONGO_DBS="${MONGO_DBS:-revolt muchat_study}"
+MONGO_DBS="${MONGO_DBS:-revolt muchat_study muchat_space}"
 
 [ -r "$ENV_BACKUP" ] || { echo "credenciais ilegíveis: $ENV_BACKUP" >&2; exit 2; }
 set -a
@@ -179,7 +179,7 @@ dump_postgres() {
 peca_postgres() { dump_postgres postgres_postgres postgres "$PG_DBS"; }
 peca_pgvector() { dump_postgres pgvector_pgvector pgvector "$PGVECTOR_DBS"; }
 
-# ------------------------------------------------------------------ MongoDB (muchat e study bot)
+# ------------------------------------------------------------------ MongoDB (muchat, study bot e espaço)
 peca_mongo() {
   local nome cifrado db
   nome="$(container stoat-database)"

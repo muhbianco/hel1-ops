@@ -13,7 +13,7 @@ O backup das lojas (mucommerce) é irmão deste e mora no outro repo:
 | `mariadb` | `api_agents` — contas, carteira, assinaturas, cobranças, agentes, mensagens, convites | MariaDB nativo do host |
 | `postgres` | `n8n_queue`, `typebot`, `outline`, `wiki` | serviço `postgres_postgres` |
 | `pgvector` | `api_agents_kb` (KB do agente, com embeddings), `chatwoot_production`, `chatwoot` | serviço `pgvector_pgvector` |
-| `mongo` | `revolt` (Muchat) e `muchat_study` (bot de estudo) | `stoat-database-1` |
+| `mongo` | `revolt` (Muchat), `muchat_study` (bot de estudo) e `muchat_space` (Muchat Espaço: vaga de cada sala no mapa e personagem de cada pessoa) | `stoat-database-1` |
 | `ytfamily` | SQLite do portal da família Premium (`yt.muhbianco.com.br`): membros, pagamentos, **livro de créditos**, assinaturas — a cópia diária que o próprio app grava | volume `yt-family_data` (`backups/yt-AAAA-MM-DD.db`) |
 | `arquivos` | mídia e config do Muchat (`data/minio`, `Revolt.toml`, `stoat.json`, `Caddyfile`, `livekit.yml`, `brand/public` **sem** `download/`), MinIO da plataforma (`outline`, `typebot`, `schedule-artifacts`), volumes (anexos do Chatwoot, avatares do agente, stacks do Portainer) | `/usr/src/stoat`, volumes do Docker |
 | `artefatos` | feed do Muchat desktop (`Muchat-Setup-*.exe`, `*.apk`, `latest.yml`) por `s3 sync` em `artefatos/`, sem cifrar | `/usr/src/stoat/brand/public/download` |
